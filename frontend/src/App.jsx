@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import './App.css'
 
 const API_URL = 'http://127.0.0.1:8000'
+const SESSION_DURATION_MS = 15 * 60 * 1000
+const SESSION_KEY = 'clinic-session'
 
 const emptyForm = {
   name: '',
@@ -9,6 +11,11 @@ const emptyForm = {
   phone: '',
   appointment_date: '',
   reason: '',
+}
+
+const loginDefaults = {
+  email: 'user@clinic.com',
+  password: 'clinic123',
 }
 
 function App() {
@@ -20,10 +27,82 @@ function App() {
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [userDisplayName, setUserDisplayName] = useState('')
+  const [timeLeft, setTimeLeft] = useState(SESSION_DURATION_MS)
+
+  useEffect(() => {
+    const storedSession = localStorage.getItem(SESSION_KEY)
+
+    if (!storedSession) {
+      setIsLoggedIn(false)
+      return
+    }
+
+    try {
+      const parsedSession = JSON.parse(storedSession)
+      const sessionStillValid = parsedSession?.expiresAt && Date.now() < parsedSession.expiresAt
+
+      if (sessionStillValid) {
+        setIsLoggedIn(true)
+        setUserDisplayName(parsedSession.email?.split('@')[0] || 'Patient')
+        setTimeLeft(Math.max(parsedSession.expiresAt - Date.now(), 0))
+      } else {
+        localStorage.removeItem(SESSION_KEY)
+        setIsLoggedIn(false)
+        setTimeLeft(SESSION_DURATION_MS)
+      }
+    } catch (error) {
+      localStorage.removeItem(SESSION_KEY)
+      setIsLoggedIn(false)
+    }
+  }, [])
 
   useEffect(() => {
     window.location.hash = view === 'list' ? '#list' : '#entry'
   }, [view])
+
+  useEffect(() => {
+    if (!isLoggedIn) return undefined
+
+    const updateTimer = () => {
+      const storedSession = localStorage.getItem(SESSION_KEY)
+
+      if (!storedSession) {
+        setIsLoggedIn(false)
+        setUserDisplayName('')
+        setTimeLeft(SESSION_DURATION_MS)
+        setMessage('Your session has expired. Please log in again.')
+        return
+      }
+
+      try {
+        const parsedSession = JSON.parse(storedSession)
+        const remaining = Math.max(parsedSession.expiresAt - Date.now(), 0)
+        setTimeLeft(remaining)
+
+        if (!parsedSession?.expiresAt || Date.now() >= parsedSession.expiresAt) {
+          localStorage.removeItem(SESSION_KEY)
+          setIsLoggedIn(false)
+          setUserDisplayName('')
+          setTimeLeft(SESSION_DURATION_MS)
+          setMessage('Your session has expired. Please log in again.')
+        }
+      } catch (error) {
+        localStorage.removeItem(SESSION_KEY)
+        setIsLoggedIn(false)
+        setUserDisplayName('')
+        setTimeLeft(SESSION_DURATION_MS)
+        setMessage('Your session has expired. Please log in again.')
+      }
+    }
+
+    updateTimer()
+    const expirationCheck = setInterval(updateTimer, 1000)
+
+    return () => clearInterval(expirationCheck)
+  }, [isLoggedIn])
 
   const fetchAppointments = async () => {
     try {
@@ -39,12 +118,64 @@ function App() {
   }
 
   useEffect(() => {
-    fetchAppointments()
-  }, [])
+    if (isLoggedIn) {
+      fetchAppointments()
+    }
+  }, [isLoggedIn])
 
   const handleChange = (event) => {
     const { name, value } = event.target
     setFormData((current) => ({ ...current, [name]: value }))
+  }
+
+  const handleLoginChange = (event) => {
+    const { name, value } = event.target
+    setLoginForm((current) => ({ ...current, [name]: value }))
+  }
+
+  const handleLogin = (event) => {
+    event.preventDefault()
+    setError('')
+    setMessage('')
+
+    const enteredEmail = loginForm.email.trim().toLowerCase()
+    const enteredPassword = loginForm.password.trim()
+
+    if (!enteredEmail || !enteredPassword) {
+      setError('Please enter your email and password.')
+      return
+    }
+
+    if (
+      enteredEmail !== loginDefaults.email ||
+      enteredPassword !== loginDefaults.password
+    ) {
+      setError('Invalid login details. Use the demo credentials shown below.')
+      return
+    }
+
+    const expiresAt = Date.now() + SESSION_DURATION_MS
+    const session = {
+      email: enteredEmail,
+      expiresAt,
+      token: `clinic-token-${Date.now()}`,
+    }
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+    setUserDisplayName(enteredEmail.split('@')[0])
+    setTimeLeft(SESSION_DURATION_MS)
+    setIsLoggedIn(true)
+    setMessage('Welcome back! Your session is active for 15 minutes.')
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem(SESSION_KEY)
+    setIsLoggedIn(false)
+    setUserDisplayName('')
+    setTimeLeft(SESSION_DURATION_MS)
+    setLoginForm({ email: '', password: '' })
+    setError('')
+    setMessage('You have been logged out.')
   }
 
   const validateForm = (data) => {
@@ -155,6 +286,61 @@ function App() {
     }
   }
 
+  if (!isLoggedIn) {
+    return (
+      <div className="auth-shell">
+        <div className="auth-card">
+          <div className="auth-header">
+            <p className="eyebrow">Patient Portal</p>
+            <h1>Welcome back</h1>
+            <p>Sign in to manage your clinic appointments.</p>
+          </div>
+
+          {error && <div className="alert error">{error}</div>}
+          {message && <div className="alert success">{message}</div>}
+
+          <form onSubmit={handleLogin} className="auth-form">
+            <label>
+              <span>Email</span>
+              <input
+                type="email"
+                name="email"
+                value={loginForm.email}
+                onChange={handleLoginChange}
+                placeholder="user@clinic.com"
+              />
+            </label>
+
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                name="password"
+                value={loginForm.password}
+                onChange={handleLoginChange}
+                placeholder="Enter password"
+              />
+            </label>
+
+            <button type="submit" className="primary-button auth-button">
+              Login
+            </button>
+          </form>
+
+          <div className="demo-box">
+            <h3>Demo credentials</h3>
+            <p>
+              Email: <strong>{loginDefaults.email}</strong>
+            </p>
+            <p>
+              Password: <strong>{loginDefaults.password}</strong>
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -163,22 +349,31 @@ function App() {
           <h1>Clinic Scheduler</h1>
         </div>
 
-        <nav className="nav-buttons">
-          <button
-            type="button"
-            className={view === 'form' ? 'active' : ''}
-            onClick={() => setView('form')}
-          >
-            Appointment Entry
-          </button>
-          <button
-            type="button"
-            className={view === 'list' ? 'active' : ''}
-            onClick={() => setView('list')}
-          >
-            Appointment List
-          </button>
-        </nav>
+        <div className="nav-group">
+          <div className="user-badge">Hi, {userDisplayName || 'Patient'}</div>
+          <div className="timer-badge">
+            Session: {Math.floor(timeLeft / 60000)}:{String(Math.floor((timeLeft % 60000) / 1000)).padStart(2, '0')}
+          </div>
+          <nav className="nav-buttons">
+            <button
+              type="button"
+              className={view === 'form' ? 'active' : ''}
+              onClick={() => setView('form')}
+            >
+              Appointment Entry
+            </button>
+            <button
+              type="button"
+              className={view === 'list' ? 'active' : ''}
+              onClick={() => setView('list')}
+            >
+              Appointment List
+            </button>
+            <button type="button" className="secondary-button" onClick={handleLogout}>
+              Logout
+            </button>
+          </nav>
+        </div>
       </header>
 
       {error && <div className="alert error">{error}</div>}
