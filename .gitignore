@@ -1,20 +1,36 @@
-# Python virtual environment
+# Python environment
 backend/venv/
-
-# Python cache
+venv/
 __pycache__/
 *.py[cod]
 
 # Environment variables / secrets
 .env
 .env.*
+!/backend/.env.example
+!/frontend/.env.example
 
-# SQLite database
+# Local databases
 *.db
+backend/*.db
+frontend/*.db
 
-# IDE
+# Build output
+frontend/dist/
+frontend/build/
+
+# Node dependencies / logs
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+
+# IDE and editor files
 .vscode/
 .idea/
+*.swp
+*.swo
 
 # OS files
 .DS_Store
+Thumbs.db
