@@ -1,9 +1,15 @@
 import { useEffect, useState } from 'react'
 import './App.css'
-
-const API_URL = 'http://127.0.0.1:8000'
-const SESSION_DURATION_MS = 15 * 60 * 1000
-const SESSION_KEY = 'clinic-session'
+import AuthScreen from './components/AuthScreen'
+import AppointmentDashboard from './components/AppointmentDashboard'
+import { API_URL, SESSION_DURATION_MS } from './constants'
+import {
+  clearSession,
+  getSessionExpiry,
+  getStoredUsers,
+  loadSession,
+  saveSession,
+} from './utils/auth'
 
 const emptyForm = {
   name: '',
@@ -11,11 +17,6 @@ const emptyForm = {
   phone: '',
   appointment_date: '',
   reason: '',
-}
-
-const loginDefaults = {
-  email: 'user@clinic.com',
-  password: 'clinic123',
 }
 
 function App() {
@@ -28,35 +29,57 @@ function App() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [isLoggedIn, setIsLoggedIn] = useState(false)
+  const [loginRole, setLoginRole] = useState('user')
+  const [authMode, setAuthMode] = useState('login')
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
+  const [signupForm, setSignupForm] = useState({ name: '', email: '', password: '' })
   const [userDisplayName, setUserDisplayName] = useState('')
   const [timeLeft, setTimeLeft] = useState(SESSION_DURATION_MS)
+  const [activityLog, setActivityLog] = useState([])
+  const [rescheduleId, setRescheduleId] = useState(null)
+  const [rescheduleDate, setRescheduleDate] = useState('')
+
+  const recordActivity = (title, description) => {
+    setActivityLog((current) => [{
+      id: Date.now() + Math.random(),
+      title,
+      description,
+      createdAt: new Date().toISOString(),
+    }, ...current].slice(0, 8))
+  }
+
+  const getApiErrorMessage = (error, fallback = 'Something went wrong.') => {
+    if (error?.message === 'Failed to fetch' || error?.name === 'TypeError') {
+      return 'Unable to connect to the server. Please make sure the backend is running.'
+    }
+
+    return error?.message || fallback
+  }
 
   useEffect(() => {
-    const storedSession = localStorage.getItem(SESSION_KEY)
+    const session = loadSession()
 
-    if (!storedSession) {
+    if (!session) {
       setIsLoggedIn(false)
       return
     }
 
-    try {
-      const parsedSession = JSON.parse(storedSession)
-      const sessionStillValid = parsedSession?.expiresAt && Date.now() < parsedSession.expiresAt
+    const role = session.role || 'user'
+    const validSession = role === 'admin'
+      ? !!session.expiresAt
+      : !!session.expiresAt && Date.now() < session.expiresAt
 
-      if (sessionStillValid) {
-        setIsLoggedIn(true)
-        setUserDisplayName(parsedSession.email?.split('@')[0] || 'Patient')
-        setTimeLeft(Math.max(parsedSession.expiresAt - Date.now(), 0))
-      } else {
-        localStorage.removeItem(SESSION_KEY)
-        setIsLoggedIn(false)
-        setTimeLeft(SESSION_DURATION_MS)
-      }
-    } catch (error) {
-      localStorage.removeItem(SESSION_KEY)
+    if (!validSession) {
+      clearSession()
       setIsLoggedIn(false)
+      setTimeLeft(SESSION_DURATION_MS)
+      return
     }
+
+    setLoginRole(role)
+    setIsLoggedIn(true)
+    setUserDisplayName(role === 'admin' ? 'Admin' : session.email?.split('@')[0] || 'Patient')
+    setTimeLeft(role === 'admin' ? 0 : Math.max(session.expiresAt - Date.now(), 0))
   }, [])
 
   useEffect(() => {
@@ -67,9 +90,9 @@ function App() {
     if (!isLoggedIn) return undefined
 
     const updateTimer = () => {
-      const storedSession = localStorage.getItem(SESSION_KEY)
+      const session = loadSession()
 
-      if (!storedSession) {
+      if (!session) {
         setIsLoggedIn(false)
         setUserDisplayName('')
         setTimeLeft(SESSION_DURATION_MS)
@@ -77,20 +100,16 @@ function App() {
         return
       }
 
-      try {
-        const parsedSession = JSON.parse(storedSession)
-        const remaining = Math.max(parsedSession.expiresAt - Date.now(), 0)
-        setTimeLeft(remaining)
+      if (session.role === 'admin') {
+        setTimeLeft(0)
+        return
+      }
 
-        if (!parsedSession?.expiresAt || Date.now() >= parsedSession.expiresAt) {
-          localStorage.removeItem(SESSION_KEY)
-          setIsLoggedIn(false)
-          setUserDisplayName('')
-          setTimeLeft(SESSION_DURATION_MS)
-          setMessage('Your session has expired. Please log in again.')
-        }
-      } catch (error) {
-        localStorage.removeItem(SESSION_KEY)
+      const remaining = Math.max(session.expiresAt - Date.now(), 0)
+      setTimeLeft(remaining)
+
+      if (!session.expiresAt || Date.now() >= session.expiresAt) {
+        clearSession()
         setIsLoggedIn(false)
         setUserDisplayName('')
         setTimeLeft(SESSION_DURATION_MS)
@@ -99,9 +118,8 @@ function App() {
     }
 
     updateTimer()
-    const expirationCheck = setInterval(updateTimer, 1000)
-
-    return () => clearInterval(expirationCheck)
+    const timer = setInterval(updateTimer, 1000)
+    return () => clearInterval(timer)
   }, [isLoggedIn])
 
   const fetchAppointments = async () => {
@@ -123,17 +141,7 @@ function App() {
     }
   }, [isLoggedIn])
 
-  const handleChange = (event) => {
-    const { name, value } = event.target
-    setFormData((current) => ({ ...current, [name]: value }))
-  }
-
-  const handleLoginChange = (event) => {
-    const { name, value } = event.target
-    setLoginForm((current) => ({ ...current, [name]: value }))
-  }
-
-  const handleLogin = (event) => {
+  const handleLogin = async (event) => {
     event.preventDefault()
     setError('')
     setMessage('')
@@ -146,30 +154,130 @@ function App() {
       return
     }
 
-    if (
-      enteredEmail !== loginDefaults.email ||
-      enteredPassword !== loginDefaults.password
-    ) {
-      setError('Invalid login details. Use the demo credentials shown below.')
+    try {
+      if (loginRole === 'admin') {
+        const response = await fetch(`${API_URL}/auth/login`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: enteredEmail, password: enteredPassword }),
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json()
+          throw new Error(errorData.detail || 'Invalid admin login details.')
+        }
+
+        const user = await response.json()
+
+        if (user.role !== 'admin') {
+          throw new Error('Invalid admin login details.')
+        }
+
+        saveSession({
+          email: enteredEmail,
+          role: 'admin',
+          expiresAt: getSessionExpiry('admin'),
+          token: `clinic-token-${Date.now()}`,
+        })
+
+        setUserDisplayName('Admin')
+        setIsLoggedIn(true)
+        setTimeLeft(0)
+        setActivityLog([])
+        setMessage('Welcome, Admin! Your admin session is active without a time limit.')
+        return
+      }
+
+      const response = await fetch(`${API_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: enteredEmail, password: enteredPassword }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Invalid user login details.')
+      }
+
+      const user = await response.json()
+
+      saveSession({
+        email: enteredEmail,
+        role: user.role || 'user',
+        expiresAt: getSessionExpiry('user'),
+        token: `clinic-token-${Date.now()}`,
+      })
+
+      setUserDisplayName(user.name?.split(' ')[0] || enteredEmail.split('@')[0])
+      setIsLoggedIn(true)
+      setTimeLeft(SESSION_DURATION_MS)
+      setActivityLog([])
+      setMessage('Welcome back! Your session is active for 15 minutes.')
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Login failed. Please try again.'))
+    }
+  }
+
+  const handleSignup = async (event) => {
+    event.preventDefault()
+    setError('')
+    setMessage('')
+
+    const name = signupForm.name.trim()
+    const enteredEmail = signupForm.email.trim().toLowerCase()
+    const enteredPassword = signupForm.password.trim()
+
+    if (!name || !enteredEmail || !enteredPassword) {
+      setError('Please complete all sign-up fields.')
       return
     }
 
-    const expiresAt = Date.now() + SESSION_DURATION_MS
-    const session = {
-      email: enteredEmail,
-      expiresAt,
-      token: `clinic-token-${Date.now()}`,
+    if (enteredPassword.length < 6) {
+      setError('Password must be at least 6 characters long.')
+      return
     }
 
-    localStorage.setItem(SESSION_KEY, JSON.stringify(session))
-    setUserDisplayName(enteredEmail.split('@')[0])
-    setTimeLeft(SESSION_DURATION_MS)
-    setIsLoggedIn(true)
-    setMessage('Welcome back! Your session is active for 15 minutes.')
+    try {
+      const response = await fetch(`${API_URL}/auth/signup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          email: enteredEmail,
+          password: enteredPassword,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Sign-up failed.')
+      }
+
+      const user = await response.json()
+
+      saveSession({
+        email: enteredEmail,
+        role: user.role || 'user',
+        expiresAt: getSessionExpiry('user'),
+        token: `clinic-token-${Date.now()}`,
+      })
+
+      setLoginRole('user')
+      setAuthMode('login')
+      setUserDisplayName(user.name?.split(' ')[0] || name.split(' ')[0])
+      setIsLoggedIn(true)
+      setTimeLeft(SESSION_DURATION_MS)
+      setSignupForm({ name: '', email: '', password: '' })
+      setLoginForm({ email: enteredEmail, password: enteredPassword })
+      setActivityLog([])
+      setMessage('Your account has been created successfully and you are logged in.')
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Sign-up failed. Please try again.'))
+    }
   }
 
   const handleLogout = () => {
-    localStorage.removeItem(SESSION_KEY)
+    clearSession()
     setIsLoggedIn(false)
     setUserDisplayName('')
     setTimeLeft(SESSION_DURATION_MS)
@@ -188,11 +296,6 @@ function App() {
     if (!data.appointment_date) return 'Appointment date is required.'
     if (!data.reason.trim()) return 'Reason is required.'
     return ''
-  }
-
-  const resetForm = () => {
-    setFormData(emptyForm)
-    setEditingId(null)
   }
 
   const handleSubmit = async (event) => {
@@ -215,20 +318,27 @@ function App() {
         body: JSON.stringify(formData),
       }
 
-      const url = editingId ? `${API_URL}/appointments/${editingId}` : `${API_URL}/appointments`
-      const response = await fetch(url, requestOptions)
+      const response = await fetch(
+        editingId ? `${API_URL}/appointments/${editingId}` : `${API_URL}/appointments`,
+        requestOptions,
+      )
 
       if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.detail || 'Request failed')
       }
 
+      recordActivity(
+        editingId ? 'Appointment updated' : 'Appointment booked',
+        `${formData.name} scheduled for ${formData.appointment_date}`,
+      )
       setMessage(editingId ? 'Appointment updated successfully.' : 'Appointment saved successfully.')
-      resetForm()
+      setFormData(emptyForm)
+      setEditingId(null)
       setView('list')
       await fetchAppointments()
     } catch (err) {
-      setError(err.message)
+      setError(getApiErrorMessage(err, 'Request failed. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -261,10 +371,15 @@ function App() {
         throw new Error('Failed to delete appointment')
       }
 
+      const deletedAppointment = appointments.find((item) => item.id === id)
+      recordActivity(
+        'Appointment deleted',
+        deletedAppointment ? `${deletedAppointment.name} was removed from the schedule.` : 'An appointment was removed.',
+      )
       setMessage('Appointment deleted.')
       await fetchAppointments()
     } catch (err) {
-      setError(err.message)
+      setError(getApiErrorMessage(err, 'Failed to delete appointment.'))
     }
   }
 
@@ -280,234 +395,97 @@ function App() {
         throw new Error('Failed to update status')
       }
 
+      const updatedAppointment = appointments.find((item) => item.id === id)
+      recordActivity(
+        'Status updated',
+        `${updatedAppointment?.name || 'Appointment'} marked as ${status}.`,
+      )
       await fetchAppointments()
     } catch (err) {
-      setError(err.message)
+      setError(getApiErrorMessage(err, 'Failed to update status.'))
+    }
+  }
+
+  const handleReschedule = async (id) => {
+    if (!rescheduleDate) {
+      setError('Please select a new appointment date before rescheduling.')
+      return
+    }
+
+    try {
+      const appointmentToUpdate = appointments.find((item) => item.id === id)
+      const response = await fetch(`${API_URL}/appointments/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...appointmentToUpdate,
+          appointment_date: rescheduleDate,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to reschedule appointment')
+      }
+
+      recordActivity(
+        'Appointment rescheduled',
+        `${appointmentToUpdate?.name || 'Appointment'} moved to ${rescheduleDate}.`,
+      )
+      setRescheduleId(null)
+      setRescheduleDate('')
+      setMessage('Appointment rescheduled successfully.')
+      await fetchAppointments()
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Failed to reschedule appointment.'))
     }
   }
 
   if (!isLoggedIn) {
     return (
-      <div className="auth-shell">
-        <div className="auth-card">
-          <div className="auth-header">
-            <p className="eyebrow">Patient Portal</p>
-            <h1>Welcome back</h1>
-            <p>Sign in to manage your clinic appointments.</p>
-          </div>
-
-          {error && <div className="alert error">{error}</div>}
-          {message && <div className="alert success">{message}</div>}
-
-          <form onSubmit={handleLogin} className="auth-form">
-            <label>
-              <span>Email</span>
-              <input
-                type="email"
-                name="email"
-                value={loginForm.email}
-                onChange={handleLoginChange}
-                placeholder="user@clinic.com"
-              />
-            </label>
-
-            <label>
-              <span>Password</span>
-              <input
-                type="password"
-                name="password"
-                value={loginForm.password}
-                onChange={handleLoginChange}
-                placeholder="Enter password"
-              />
-            </label>
-
-            <button type="submit" className="primary-button auth-button">
-              Login
-            </button>
-          </form>
-
-          <div className="demo-box">
-            <h3>Demo credentials</h3>
-            <p>
-              Email: <strong>{loginDefaults.email}</strong>
-            </p>
-            <p>
-              Password: <strong>{loginDefaults.password}</strong>
-            </p>
-          </div>
-        </div>
-      </div>
+      <AuthScreen
+        loginRole={loginRole}
+        setLoginRole={setLoginRole}
+        authMode={authMode}
+        setAuthMode={setAuthMode}
+        loginForm={loginForm}
+        setLoginForm={setLoginForm}
+        signupForm={signupForm}
+        setSignupForm={setSignupForm}
+        error={error}
+        message={message}
+        onLogin={handleLogin}
+        onSignup={handleSignup}
+      />
     )
   }
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">Appointment System</p>
-          <h1>Clinic Scheduler</h1>
-        </div>
-
-        <div className="nav-group">
-          <div className="user-badge">Hi, {userDisplayName || 'Patient'}</div>
-          <div className="timer-badge">
-            Session: {Math.floor(timeLeft / 60000)}:{String(Math.floor((timeLeft % 60000) / 1000)).padStart(2, '0')}
-          </div>
-          <nav className="nav-buttons">
-            <button
-              type="button"
-              className={view === 'form' ? 'active' : ''}
-              onClick={() => setView('form')}
-            >
-              Appointment Entry
-            </button>
-            <button
-              type="button"
-              className={view === 'list' ? 'active' : ''}
-              onClick={() => setView('list')}
-            >
-              Appointment List
-            </button>
-            <button type="button" className="secondary-button" onClick={handleLogout}>
-              Logout
-            </button>
-          </nav>
-        </div>
-      </header>
-
-      {error && <div className="alert error">{error}</div>}
-      {message && <div className="alert success">{message}</div>}
-
-      {view === 'form' ? (
-        <section className="card form-card">
-          <h2>{editingId ? 'Edit Appointment' : 'Add Appointment'}</h2>
-
-          <form onSubmit={handleSubmit} className="appointment-form">
-            <div className="form-grid">
-              <label>
-                <span>Name</span>
-                <input
-                  type="text"
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  placeholder="Enter full name"
-                />
-              </label>
-
-              <label>
-                <span>Email</span>
-                <input
-                  type="email"
-                  name="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  placeholder="name@example.com"
-                />
-              </label>
-
-              <label>
-                <span>Phone</span>
-                <input
-                  type="tel"
-                  name="phone"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  placeholder="Phone number"
-                />
-              </label>
-
-              <label>
-                <span>Appointment Date</span>
-                <input
-                  type="date"
-                  name="appointment_date"
-                  value={formData.appointment_date}
-                  onChange={handleChange}
-                />
-              </label>
-
-              <label className="full-width">
-                <span>Reason</span>
-                <textarea
-                  name="reason"
-                  value={formData.reason}
-                  onChange={handleChange}
-                  placeholder="Why is the appointment needed?"
-                  rows="4"
-                />
-              </label>
-            </div>
-
-            <div className="form-actions">
-              <button type="submit" className="primary-button" disabled={loading}>
-                {loading ? 'Saving...' : editingId ? 'Update Appointment' : 'Save Appointment'}
-              </button>
-
-              {editingId && (
-                <button type="button" className="secondary-button" onClick={resetForm}>
-                  Cancel
-                </button>
-              )}
-            </div>
-          </form>
-        </section>
-      ) : (
-        <section className="card list-card">
-          <div className="section-header">
-            <h2>Appointments</h2>
-            <button type="button" className="primary-button" onClick={() => setView('form')}>
-              New Appointment
-            </button>
-          </div>
-
-          {appointments.length === 0 ? (
-            <p className="empty-state">No appointments found.</p>
-          ) : (
-            <div className="appointment-list">
-              {appointments.map((appointment) => (
-                <div className="appointment-item" key={appointment.id}>
-                  <div className="appointment-main">
-                    <h3>{appointment.name}</h3>
-                    <p>{appointment.email}</p>
-                    <p>{appointment.phone}</p>
-                    <p>
-                      <strong>Date:</strong> {appointment.appointment_date}
-                    </p>
-                    <p>
-                      <strong>Reason:</strong> {appointment.reason}
-                    </p>
-                  </div>
-
-                  <div className="appointment-actions">
-                    <label>
-                      <span>Status</span>
-                      <select
-                        value={appointment.status}
-                        onChange={(event) => handleStatusChange(appointment.id, event.target.value)}
-                      >
-                        <option value="PENDING">PENDING</option>
-                        <option value="CONFIRMED">CONFIRMED</option>
-                      </select>
-                    </label>
-
-                    <div className="button-row">
-                      <button type="button" className="secondary-button" onClick={() => handleEdit(appointment)}>
-                        Edit
-                      </button>
-                      <button type="button" className="danger-button" onClick={() => handleDelete(appointment.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
-    </div>
+    <AppointmentDashboard
+      loginRole={loginRole}
+      userDisplayName={userDisplayName}
+      timeLeft={timeLeft}
+      error={error}
+      message={message}
+      view={view}
+      setView={setView}
+      appointments={appointments}
+      activityLog={activityLog}
+      formData={formData}
+      setFormData={setFormData}
+      editingId={editingId}
+      setEditingId={setEditingId}
+      handleSubmit={handleSubmit}
+      handleEdit={handleEdit}
+      handleDelete={handleDelete}
+      handleStatusChange={handleStatusChange}
+      handleLogout={handleLogout}
+      rescheduleId={rescheduleId}
+      setRescheduleId={setRescheduleId}
+      rescheduleDate={rescheduleDate}
+      setRescheduleDate={setRescheduleDate}
+      handleReschedule={handleReschedule}
+      loading={loading}
+    />
   )
 }
 
