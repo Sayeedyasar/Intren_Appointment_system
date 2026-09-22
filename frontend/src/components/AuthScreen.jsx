@@ -1,5 +1,3 @@
-import { loginDefaults } from '../constants'
-
 function AuthScreen({
   loginRole,
   setLoginRole,
@@ -66,7 +64,7 @@ function AuthScreen({
                 name="email"
                 value={loginForm.email}
                 onChange={handleLoginChange}
-                placeholder={loginRole === 'admin' ? loginDefaults.admin.email : 'user@example.com'}
+                placeholder="name@example.com"
               />
             </label>
 
@@ -127,13 +125,8 @@ function AuthScreen({
         )}
 
         <div className="demo-box">
-          <h3>{loginRole === 'admin' ? 'Admin credentials' : 'Registered account examples'}</h3>
-          <p>
-            Email: <strong>{loginRole === 'admin' ? loginDefaults.admin.email : 'user@clinic.com'}</strong>
-          </p>
-          <p>
-            Password: <strong>{loginRole === 'admin' ? loginDefaults.admin.password : 'clinic123'}</strong>
-          </p>
+          <h3>Credentials</h3>
+          <p>Use the email and password configured in your backend environment.</p>
           {loginRole === 'user' && authMode === 'signup' && (
             <p className="demo-note">Create your own account to sign in later.</p>
           )}

@@ -21,6 +21,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     role: str
     created_at: datetime
+    token: str | None = None
 
     class Config:
         from_attributes = True

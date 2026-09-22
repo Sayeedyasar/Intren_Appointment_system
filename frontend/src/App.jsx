@@ -124,7 +124,9 @@ function App() {
 
   const fetchAppointments = async () => {
     try {
-      const response = await fetch(`${API_URL}/appointments`)
+      const response = await fetch(`${API_URL}/appointments`, {
+        credentials: 'include',
+      })
       if (!response.ok) {
         throw new Error('Failed to load appointments')
       }
@@ -159,6 +161,7 @@ function App() {
         const response = await fetch(`${API_URL}/auth/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
           body: JSON.stringify({ email: enteredEmail, password: enteredPassword }),
         })
 
@@ -177,7 +180,6 @@ function App() {
           email: enteredEmail,
           role: 'admin',
           expiresAt: getSessionExpiry('admin'),
-          token: `clinic-token-${Date.now()}`,
         })
 
         setUserDisplayName('Admin')
@@ -191,6 +193,7 @@ function App() {
       const response = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: enteredEmail, password: enteredPassword }),
       })
 
@@ -241,6 +244,7 @@ function App() {
       const response = await fetch(`${API_URL}/auth/signup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           name,
           email: enteredEmail,
@@ -320,7 +324,10 @@ function App() {
 
       const response = await fetch(
         editingId ? `${API_URL}/appointments/${editingId}` : `${API_URL}/appointments`,
-        requestOptions,
+        {
+          ...requestOptions,
+          credentials: 'include',
+        },
       )
 
       if (!response.ok) {
@@ -365,6 +372,7 @@ function App() {
     try {
       const response = await fetch(`${API_URL}/appointments/${id}`, {
         method: 'DELETE',
+        credentials: 'include',
       })
 
       if (!response.ok) {
@@ -388,6 +396,7 @@ function App() {
       const response = await fetch(`${API_URL}/appointments/${id}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ status }),
       })
 
@@ -417,6 +426,7 @@ function App() {
       const response = await fetch(`${API_URL}/appointments/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           ...appointmentToUpdate,
           appointment_date: rescheduleDate,

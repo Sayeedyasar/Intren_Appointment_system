@@ -4,3 +4,6 @@ sqlalchemy==2.0.54
 pydantic==2.13.5
 email-validator==2.3.0
 psycopg2-binary==2.9.13
+PyJWT==2.10.1
+pytest==8.3.5
+httpx==0.28.1
