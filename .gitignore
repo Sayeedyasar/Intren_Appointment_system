@@ -1,18 +1,27 @@
 # Python environment
+backend/.venv/
 backend/venv/
 venv/
 __pycache__/
+backend/__pycache__/
 *.py[cod]
+*.pytest_cache/
+backend/.pytest_cache/
 
 # Environment variables / secrets
 .env
 .env.*
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
 !/backend/.env.example
 !/frontend/.env.example
 
 # Local databases
 *.db
 backend/*.db
+backend/appointments.db
 frontend/*.db
 
 # Build output
