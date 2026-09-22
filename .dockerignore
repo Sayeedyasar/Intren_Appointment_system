@@ -1,0 +1,12 @@
+**/.git
+**/.gitignore
+**/node_modules
+**/dist
+**/__pycache__
+**/.venv
+**/.env
+**/.env.*
+**/*.db
+**/.DS_Store
+**/.idea
+**/.vscode
